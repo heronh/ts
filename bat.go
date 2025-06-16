@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 )
 
 type Descriptor struct {
@@ -24,9 +25,11 @@ type BATSection struct {
 	VersionNumber      byte
 	SectionNumber      byte
 	SectionLength      int
+	Sections           []bool
 	LastSectionNumber  byte
 	BouquetDescriptors []Descriptor
 	TransportStreams   []TransportStream
+	TS                 map[int]TransportStream // Map to store Transport Streams by ID
 }
 
 const (
@@ -40,7 +43,6 @@ const (
 )
 
 // Variável final para os pacotes BAT
-var finalBATSection []BATSection
 var finalBATMap map[uint16]BATSection
 
 // Funções para verificar se o pacote é NIT
@@ -208,8 +210,10 @@ func parseBATSection(section []byte) *BATSection {
 
 func processTsFile(filename string) {
 
-	// Initialize finalBATSection
-	finalBATSection = make([]BATSection, 0)
+	// Initialize the finalBATMap if it is nil
+	if finalBATMap == nil {
+		finalBATMap = make(map[uint16]BATSection)
+	}
 
 	// Process each packet in the TS file
 	file, err := os.Open(filename)
@@ -238,15 +242,12 @@ func processTsFile(filename string) {
 			//fmt.Printf("No valid payload found in packet %d, skipping...\n", packetCounter)
 			continue
 		}
-		fmt.Printf("Processing packet %d\n", packetCounter)
 
 		if start {
 			if collecting && len(sectionBuffer) >= expectedLength {
 				section := parseBATSection(sectionBuffer)
-				if section != nil {
-					for _, ts := range section.TransportStreams {
-						fmt.Printf("  TS ID: %d, ONID: %d, Descriptors: %d\n", ts.TransportStreamID, ts.OriginalNetworkID, len(ts.TransportDescriptors))
-					}
+				if section == nil {
+					continue
 				}
 			}
 			pointer := int(payload[0])
@@ -261,118 +262,160 @@ func processTsFile(filename string) {
 		}
 
 		if collecting {
-			fmt.Println("Collecting BAT section detected at packet", packetCounter)
 			sectionBuffer = append(sectionBuffer, payload...)
 			if len(sectionBuffer) >= expectedLength {
 				section := parseBATSection(sectionBuffer)
-				addSectionToFinal(section)
 				collecting = false
+
+				if addSectionToFinal(section) {
+					// For test purposes, finish scanning after the first valid section
+					break
+				}
 			}
 		}
 	}
+	fmt.Println("Total packets processed:", packetCounter)
 
 	// Finalizado parse da BAT
 	fmt.Println("Processing TS file finished:", filename)
-	section, exists := finalBATMap[25008]
+	section, exists := finalBATMap[25000]
 	if exists {
-		fmt.Printf("\nFinal BAT Section for Bouquet ID 25008:\n")
+		fmt.Printf("\nFinal BAT Section for Bouquet ID 25000:\n")
 		fmt.Printf("Bouquet ID: %d, Version: %d, Section: %d/%d/%d\n", section.BouquetID, section.VersionNumber, section.SectionNumber, section.LastSectionNumber, section.SectionLength)
 		for _, ts := range section.TransportStreams {
-			if ts.TransportStreamID == 24682 {
-				fmt.Printf("\tTS ID: %d, ONID: %d, Descriptors: %d\n", ts.TransportStreamID, ts.OriginalNetworkID, len(ts.TransportDescriptors))
-				for _, desc := range ts.TransportDescriptors {
+			fmt.Printf("\tTS ID: %d, ONID: %d, Descriptors: %d\n", ts.TransportStreamID, ts.OriginalNetworkID, len(ts.TransportDescriptors))
+			for _, desc := range ts.TransportDescriptors {
+				fmt.Printf("\t\tOTA Linkage Descriptor found 0x%x:\n", desc.Tag)
+				fmt.Println(hex.Dump(desc.Data))
+			}
+		}
+	} else {
+		fmt.Println("No final BAT Section found for Bouquet ID 25000")
+	}
+
+	// Print all sections found
+	fmt.Println("Total sections found:", len(finalBATMap))
+	// Print Bouquet IDs in a compact, comma-separated format, 16 per line
+	bouquetIDs := make([]uint16, 0, len(finalBATMap))
+	for bouquetID := range finalBATMap {
+		bouquetIDs = append(bouquetIDs, bouquetID)
+	}
+
+	// Optional: sort for consistent output
+	slices.Sort(bouquetIDs)
+	for i, bouquetID := range bouquetIDs {
+		if i > 0 && i%16 != 0 {
+			fmt.Printf("")
+		}
+		fmt.Printf("%d ", bouquetID)
+		if (i+1)%16 == 0 {
+			fmt.Println()
+		}
+	}
+
+	// Print bouquet id 25000
+	if section, exists := finalBATMap[25000]; exists {
+		fmt.Printf("\nBouquet ID 25000 found with Version: %d, Section Number: %d, Last Section Number: %d\n", section.VersionNumber, section.SectionNumber, section.LastSectionNumber)
+
+		counter := 0
+		for _, ts := range section.TransportStreams {
+			fmt.Printf("\t%d - Transport Stream ID: %d, Original Network ID: %d, Descriptors: %d\n", counter, ts.TransportStreamID, ts.OriginalNetworkID, len(ts.TransportDescriptors))
+			for _, desc := range ts.TransportDescriptors {
+				if desc.Tag == otaLinkageDescriptor {
 					fmt.Printf("\t\tOTA Linkage Descriptor found 0x%x:\n", desc.Tag)
 					fmt.Println(hex.Dump(desc.Data))
 				}
 			}
+			counter++
 		}
-	} else {
-		fmt.Println("No final BAT Section found for Bouquet ID 25008")
+
+		fmt.Println()
+		counter = 0
+		for _, ts := range section.TS {
+			fmt.Printf("\t%d - Transport Stream ID: %d, Original Network ID: %d, Descriptors: %d\n", counter, ts.TransportStreamID, ts.OriginalNetworkID, len(ts.TransportDescriptors))
+			for _, desc := range ts.TransportDescriptors {
+				if desc.Tag == otaLinkageDescriptor {
+					fmt.Printf("\t\tOTA Linkage Descriptor found 0x%x:\n", desc.Tag)
+					fmt.Println(hex.Dump(desc.Data))
+				}
+			}
+			counter++
+		}
+
 	}
 
+	fmt.Println("\nProcessing complete.")
 }
 
-func addSectionToFinal(section *BATSection) {
+func addSectionToFinal(section *BATSection) bool {
 
 	// If the section is nil, do not add it
 	if section == nil {
-		return
+		return false
 	}
 
-	// Initialize the finalBATMap if it is nil
-	if finalBATMap == nil {
-		finalBATMap = make(map[uint16]BATSection)
+	// for test purposes, only add sections with BouquetID 25000
+	if section.BouquetID != 25000 {
+		return false
 	}
 
 	// Check if the section is already in the final map
 	_, exists := finalBATMap[section.BouquetID]
 	if !exists {
+		fmt.Println("Creating section:", section.BouquetID, "Version:", section.VersionNumber, "Section Number:", section.SectionNumber, "Last Section Number:", section.LastSectionNumber, "LastSectionNumber:", section.LastSectionNumber)
+
+		for it := 0; it <= int(section.LastSectionNumber); it++ {
+			section.Sections = append(section.Sections, false)
+		}
+
+		fmt.Println("Sections: ", section.LastSectionNumber)
 		finalBATMap[section.BouquetID] = *section
-	}
 
-	// Check if the section with same bouquetid exists in the final list
-	found := false
-	for _, existingSection := range finalBATSection {
-		if existingSection.BouquetID == section.BouquetID {
-			found = true
-			break
+		// Retrieve, modify, and store back to update fields in the map value
+		tmp := finalBATMap[section.BouquetID]
+		tmp.Sections[section.SectionNumber] = true
+		tmp.TS = make(map[int]TransportStream)
+		for _, ts := range section.TransportStreams {
+			tmp.TS[int(ts.TransportStreamID)] = ts
 		}
-	}
+		finalBATMap[section.BouquetID] = tmp
 
-	if !found {
-		// Create a new empty final section
-		newSection := BATSection{
-			BouquetID:         section.BouquetID,
-			VersionNumber:     section.VersionNumber,
-			SectionNumber:     section.SectionNumber,
-			LastSectionNumber: section.LastSectionNumber,
-			//BouquetDescriptors: section.BouquetDescriptors,
-			//TransportStreams: section.TransportStreams,
-		}
-		finalBATSection = append(finalBATSection, newSection)
-	}
+	} else {
 
-	// Create a pointer to section of this bouquetid
-	var finalSection *BATSection
-	for i := range finalBATSection {
-		if finalBATSection[i].BouquetID == section.BouquetID {
-			finalSection = &finalBATSection[i]
-			break
-		}
-	}
-
-	// Check each BouquetDescriptor and append it to the final section
-	found = false
-	for _, desc := range section.BouquetDescriptors {
-		if desc.Tag == otaLinkageDescriptor {
-			found = true
-			finalSection.BouquetDescriptors = append(finalSection.BouquetDescriptors, desc)
-		}
-	}
-
-	if !found {
-		fmt.Printf("No OTA Linkage Descriptor found in Bouquet Descriptors for Bouquet ID %d\n", section.BouquetID)
-	}
-
-	// Check each TransportStream and append it to the final section
-	for _, ts := range section.TransportStreams {
-		found = false
-		for _, existingTS := range finalSection.TransportStreams {
-			if existingTS.TransportStreamID == ts.TransportStreamID && existingTS.OriginalNetworkID == ts.OriginalNetworkID {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			newTS := TransportStream{
-				TransportStreamID:    ts.TransportStreamID,
-				OriginalNetworkID:    ts.OriginalNetworkID,
-				TransportDescriptors: ts.TransportDescriptors,
-			}
-			finalSection.TransportStreams = append(finalSection.TransportStreams, newTS)
+		mapPointer := finalBATMap[section.BouquetID]
+		if mapPointer.Sections[section.SectionNumber] {
+			fmt.Println("Section already exists:", section.SectionNumber)
 		} else {
-			fmt.Printf("Transport Stream ID %d already exists in final section for Bouquet ID %d\n", ts.TransportStreamID, section.BouquetID)
+			fmt.Println("Updating section:", section.BouquetID, "Version:", section.VersionNumber, "Section Number:", section.SectionNumber, "Last Section Number:", section.LastSectionNumber)
+
+			// Update the existing section
+			mapPointer.TransportStreams = append(mapPointer.TransportStreams, section.TransportStreams...)
+			mapPointer.Sections[section.SectionNumber] = true
+			// Update the TS map with new Transport Streams
+			for _, ts := range section.TransportStreams {
+				if existingTS, exists := mapPointer.TS[int(ts.TransportStreamID)]; exists {
+					// If the Transport Stream already exists, merge descriptors
+					existingTS.TransportDescriptors = append(existingTS.TransportDescriptors, ts.TransportDescriptors...)
+					mapPointer.TS[int(ts.TransportStreamID)] = existingTS
+				} else {
+					// If it doesn't exist, add it
+					mapPointer.TS[int(ts.TransportStreamID)] = ts
+				}
+			}
+			finalBATMap[section.BouquetID] = mapPointer
+			fmt.Println("Section updated:", section.SectionNumber)
 		}
 	}
+
+	// Verify if all sections are collected
+	allSectionsCollected := true
+	for sectionNumber := range finalBATMap[section.BouquetID].Sections {
+		if !finalBATMap[section.BouquetID].Sections[sectionNumber] {
+			fmt.Println("Section not collected:", sectionNumber)
+			allSectionsCollected = false
+			break
+		}
+		fmt.Println("Section collected:", sectionNumber)
+	}
+	return allSectionsCollected
 }
