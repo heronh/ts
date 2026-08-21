@@ -27,7 +27,7 @@ tests/                  scan / busca / remap + smoke da UI
 - TSDuck opcional: `tsp` no `PATH`
 
 ```bash
-sudo apt install build-essential cmake ninja-build python3-dev python3-venv
+sudo apt install build-essential cmake ninja-build python3-dev python3-venv libegl1
 # opcional, para o backend TSDuck:
 # siga https://tsduck.io/ e instale o pacote tsp
 ```
