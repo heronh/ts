@@ -1,0 +1,30 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "tslab"
+version = "0.1.0"
+description = "Analisador MPEG-TS para Linux: UI PySide6 e núcleo C++/TSDuck"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "TS Lab" }]
+dependencies = ["PySide6>=6.6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+tslab = "tslab.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/heronh/ts"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.build-type = "Release"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
