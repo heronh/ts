@@ -6,13 +6,15 @@ import pytest
 
 from tests.ts_factory import build_sample_ts
 
-pytest.importorskip("PySide6")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PySide6.QtWidgets import QApplication
+except ImportError as exc:
+    pytest.skip(f"PySide6 indisponível neste ambiente: {exc}", allow_module_level=True)
 
 
 def test_main_window_loads_sample(tmp_path) -> None:
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
     from tslab.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication(["tslab-test"])
@@ -27,5 +29,4 @@ def test_main_window_loads_sample(tmp_path) -> None:
     assert window.hex_view.toPlainText()
     window.close()
     del window
-    # Keep the process-wide QApplication alive for other tests.
     assert app is not None
